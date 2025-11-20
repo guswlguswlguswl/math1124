@@ -2,6 +2,8 @@ import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import os
 from pathlib import Path
 import sympy as sp
@@ -9,18 +11,54 @@ import re
 
 st.set_page_config(page_title="함수 절댓값 시각화", layout="wide")
 
-# 로컬 폰트 등록 (프로젝트의 `font/NanumGothic-Regular.ttf` 사용)
-# 존재하면 matplotlib에 추가하고 전체 폰트로 설정합니다.
+# 로컬 폰트 등록: 프로젝트 내 `fonts/` 폴더에서 나눔고딕 ttf를 찾아 matplotlib에 추가합니다.
 try:
-    font_path = Path(__file__).resolve().parent / "font" / "NanumGothic-Regular.ttf"
-    if font_path.exists():
-        fm.fontManager.addfont(str(font_path))
-        fp = fm.FontProperties(fname=str(font_path))
-        plt.rcParams['font.family'] = fp.get_name()
+    base_dir = Path(__file__).resolve().parent
+    candidate_paths = [
+        base_dir / 'fonts',
+        base_dir / 'font',
+        base_dir / 'fonts' / 'Nanum_Gothic'
+    ]
+
+    font_file = None
+    # 우선적으로 흔한 파일명을 찾고, 없으면 폴더 내에서 Nanum으로 시작하는 ttf를 찾음
+    preferred_names = ['NanumGothic-Regular.ttf', 'NanumGothuic-Regular.ttf', 'NanumGothic.ttf']
+    for p in candidate_paths:
+        try:
+            if not p.exists():
+                continue
+        except Exception:
+            continue
+        for name in preferred_names:
+            candidate = p / name
+            if candidate.exists():
+                font_file = candidate
+                break
+        if font_file:
+            break
+        # 글꼴 파일을 glob으로 찾아보기
+        for candidate in p.glob('*Nanum*.ttf'):
+            if candidate.is_file():
+                font_file = candidate
+                break
+        if font_file:
+            break
+
+    if font_file is not None:
+        fm.fontManager.addfont(str(font_file))
+        fp = fm.FontProperties(fname=str(font_file))
+        # matplotlib 설정: 폰트 이름을 사용하여 기본 패밀리와 sans-serif에 우선 적용
+        try:
+            font_name = fp.get_name()
+            plt.rcParams['font.family'] = font_name
+            plt.rcParams['font.sans-serif'] = [font_name]
+        except Exception:
+            # 실패하더라도 앱이 멈추지 않도록 무시
+            pass
         # 한글 폰트로 인해 마이너스 기호가 깨질 수 있으므로 대체 처리
         plt.rcParams['axes.unicode_minus'] = False
     else:
-        # 폰트 파일이 없으면 무시
+        # 폰트 파일을 찾지 못하면 무시
         pass
 except Exception:
     # 폰트 설정에 실패해도 앱 동작을 멈추지 않음
@@ -172,57 +210,14 @@ if 'current_expr' not in st.session_state:
     st.session_state.current_expr = function_input
 
 # 메인 제목
-st.title("📊 함수의 절댓값 시각화 (누적 계산기)")
+st.title("절댓값이 있는 함수의 그래프 이해하기")
 
 st.write("**계산기처럼 절댓값을 누적으로 적용하세요!**")
 
-# 절댓값 타입 선택 버튼 (누적 적용)
-col_btn1, col_btn2, col_btn3, col_reset = st.columns([1, 1, 1, 0.8])
+# 메인 콘텐츠: 왼쪽은 그래프(넓게), 오른쪽은 정보+버튼(좁게)
+col_main_left, col_main_right = st.columns([3, 1])
 
-with col_btn1:
-    if st.button("📌 |f(x)|", use_container_width=True, key="btn_fy"):
-        st.session_state.abs_history.append('|f(x)|')
-        st.session_state.abs_type = 'f(x)'
-
-with col_btn2:
-    if st.button("📌 f(|x|)", use_container_width=True, key="btn_fx"):
-        st.session_state.abs_history.append('f(|x|)')
-        st.session_state.abs_type = 'x'
-
-with col_btn3:
-    if st.button("📌 |y|", use_container_width=True, key="btn_y"):
-        st.session_state.abs_history.append('|y|')
-        st.session_state.abs_type = 'y'
-
-with col_reset:
-    if st.button("🔄 초기화", use_container_width=True, key="btn_reset"):
-        st.session_state.abs_history = []
-        st.session_state.current_expr = function_input
-        st.rerun()
-
-st.write("---")
-
-# 적용 내역 표시
-st.header("📝 적용 내역")
-
-if st.session_state.abs_history:
-    col_history_left, col_history_right = st.columns([2, 1])
-    
-    with col_history_left:
-        history_text = " → ".join(st.session_state.abs_history)
-        st.write(f"**적용된 절댓값 순서:** {history_text}")
-    
-    with col_history_right:
-        st.write(f"**총 {len(st.session_state.abs_history)}회 적용**")
-else:
-    st.info("⏳ 아직 절댓값이 적용되지 않았습니다. 버튼을 눌러보세요!")
-
-st.write("---")
-
-# 메인 콘텐츠
-col_main_left, col_main_right = st.columns([1, 3])
-
-with col_main_left:
+with col_main_right:
     st.header("📋 정보")
     st.write(f"**원본 함수: y = {function_input}**")
     st.write(f"**차수: {degree}차**")
@@ -230,22 +225,56 @@ with col_main_left:
     
     st.write("---")
     
-    if st.session_state.abs_history:
-        last_mode = st.session_state.abs_type
-        if last_mode == 'f(x)':
-            st.write("**마지막 적용: |f(x)|**")
-            st.write("y축에 절댓값 적용")
-        elif last_mode == 'x':
-            st.write("**마지막 적용: f(|x|)**")
-            st.write("x축에 절댓값 적용")
-        else:  # 'y'
-            st.write("**마지막 적용: |y|**")
-            st.write("y값 전체에 절댓값 적용")
-    else:
-        st.write("**상태: 원본 함수**")
-        st.write("아직 절댓값이 적용되지 않았습니다.")
+    # 오른쪽 칼럼에 절댓값 적용 버튼을 수직으로 배치합니다 (버튼을 먼저 렌더링하여
+    # 클릭 시 즉시 아래 수식 표시에 반영되도록 함).
+    st.subheader("절댓값 적용 (누적)")
+    if st.button("📌 |f(x)|", key="btn_fy_right"):
+        st.session_state.abs_history.append('|f(x)|')
+        st.session_state.abs_type = 'f(x)'
 
-with col_main_right:
+    if st.button("📌 f(|x|)", key="btn_fx_right"):
+        st.session_state.abs_history.append('f(|x|)')
+        st.session_state.abs_type = 'x'
+
+    if st.button("📌 |y|", key="btn_y_right"):
+        st.session_state.abs_history.append('|y|')
+        st.session_state.abs_type = 'y'
+
+    if st.button("🔄 초기화", key="btn_reset_right"):
+        st.session_state.abs_history = []
+        st.session_state.current_expr = function_input
+
+    # 현재 함수식에 절댓값이 어떻게 적용되었는지 수식으로 표시합니다.
+    try:
+        sym_final_display = f_expr
+        left_abs_display = False
+        for op in st.session_state.abs_history:
+            if op == 'f(|x|)':
+                sym_final_display = sym_final_display.subs(x, sp.Abs(x))
+            elif op == '|f(x)|':
+                sym_final_display = sp.Abs(sym_final_display)
+            elif op == '|y|':
+                left_abs_display = True
+
+        try:
+            if left_abs_display:
+                eq_disp = sp.Eq(sp.Abs(sp.Symbol('y')), sp.simplify(sym_final_display))
+            else:
+                eq_disp = sp.Eq(sp.Symbol('y'), sp.simplify(sym_final_display))
+            st.subheader("🔣 현재 적용된 수식")
+            st.latex(sp.latex(eq_disp))
+        except Exception:
+            st.subheader("🔣 현재 적용된 수식")
+            if left_abs_display:
+                st.write(f"|y| = {str(sym_final_display)}")
+            else:
+                st.write(f"y = {str(sym_final_display)}")
+
+    except Exception:
+        st.write("적용된 수식을 표시할 수 없습니다.")
+
+    # (버튼 블록은 위로 이동되어 중복 제거됨)
+with col_main_left:
     st.header("📈 그래프")
     
     # 함수 정의
@@ -268,22 +297,25 @@ with col_main_right:
         """전체 y값에 절댓값을 씌운 함수"""
         return abs(f(val))
 
-    # 그래프 그리기
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-
-    # X축 범위 설정
-    x_vals = np.linspace(-10, 10, 500)
+    # 그래프 그리기 (Plotly 사용하여 마우스 오버로 x절편 좌표 표시)
+    x_vals = np.linspace(-10, 10, 1000)
 
     # 원본 함수
-    y_orig = np.array([f(val) for val in x_vals])
+    y_orig = np.array([f(val) for val in x_vals], dtype=float)
 
     # sympy로 누적된 연산을 적용하여 최종 심볼릭 표현과 숫자 배열 생성
+    # 주의: '|y|'는 좌변 절댓값을 의미하므로 sym_final에는 Abs를 적용하지 않고
+    # 별도 flag(left_abs)를 사용하여 그래프를 그립니다.
     sym_final = f_expr
+    left_abs = False
     for op in st.session_state.abs_history:
         if op == 'f(|x|)':
             sym_final = sym_final.subs(x, sp.Abs(x))
-        else:  # '|f(x)|' 또는 '|y|'는 동일하게 y에 절댓값 적용
+        elif op == '|f(x)|':
             sym_final = sp.Abs(sym_final)
+        elif op == '|y|':
+            # 좌변 절댓값 표기: sym_final은 그대로 두고 플래그만 설정
+            left_abs = True
 
     # 라벨과 제목 설정
     if st.session_state.abs_history:
@@ -305,163 +337,115 @@ with col_main_right:
     try:
         numeric_func = sp.lambdify(x, sym_final, modules=["numpy"])
         y_transformed = numeric_func(x_vals)
-        # lambdify 결과가 스칼라인 경우 처리
         y_transformed = np.array(y_transformed, dtype=float)
     except Exception:
-        # 실패하면 원본으로 되돌림
         y_transformed = y_orig
         title_suffix = "변환 오류 - 원본 표시"
         ylabel = "f(x)"
 
-    # 첫 번째 그래프: 원본 함수
-    ax1.plot(x_vals, y_orig, 'b-', linewidth=2.5, label='원본 함수')
-    ax1.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
-    ax1.axvline(x=0, color='k', linestyle='-', linewidth=0.5)
-    ax1.grid(True, alpha=0.3)
-    ax1.set_xlabel('x', fontsize=12)
-    ax1.set_ylabel('f(x)', fontsize=12)
-    ax1.set_title(f'원본 함수: y = {function_input}', fontsize=12, fontweight='bold')
-    ax1.set_ylim(-15, 15)
-    ax1.legend(fontsize=10)
+    # x절편(근) 계산: 선형 보간으로 위치 계산 (sign change 기반)
+    def find_roots(xs, ys):
+        roots = []
+        ys = np.array(ys, dtype=float)
+        finite_mask = np.isfinite(ys)
+        xs = np.array(xs)
+        for i in range(len(ys) - 1):
+            if not (finite_mask[i] and finite_mask[i+1]):
+                continue
+            y1, y2 = ys[i], ys[i+1]
+            if abs(y1) < 1e-8:
+                roots.append(xs[i])
+            if y1 == 0 or y2 == 0:
+                # handled by abs check or next iteration
+                pass
+            if y1 * y2 < 0:
+                x1, x2 = xs[i], xs[i+1]
+                # linear interpolation
+                xr = x1 - y1 * (x2 - x1) / (y2 - y1)
+                roots.append(xr)
+        return sorted(set([round(r, 8) for r in roots]))
 
-    # 이차함수이면 꼭짓점 좌표를 계산해서 그래프 상에 (a,b) 형태로 표시합니다.
+    roots_orig = find_roots(x_vals, y_orig)
+    roots_trans = find_roots(x_vals, y_transformed)
+
+    # Plotly subplot
+    fig = make_subplots(rows=1, cols=2, subplot_titles=(f'원본 함수: y = {function_input}', f'절댓값 적용: {title_suffix}'))
+
+    # 원본 함수 선
+    fig.add_trace(go.Scatter(x=x_vals, y=y_orig, mode='lines', name='원본 함수', line=dict(color='blue')),
+                  row=1, col=1)
+    # x축
+    fig.add_trace(go.Scatter(x=[x_vals[0], x_vals[-1]], y=[0, 0], mode='lines', line=dict(color='black', width=1), showlegend=False), row=1, col=1)
+
+    # 꼭짓점 표시 (이차함수인 경우)
     try:
         if degree == 2:
             p = sp.Poly(f_expr, x)
-            # 계수 추출: a, b (a != 0)
-            # Poly.coeffs()는 최고차항부터 반환하므로 안전하게 사용
             coeffs = p.coeffs()
             if len(coeffs) >= 3:
                 a_coeff = float(coeffs[0])
                 b_coeff = float(coeffs[1])
             else:
-                # 안전한 폴백
                 a_coeff = float(p.coeff_monomial(x**2))
                 b_coeff = float(p.coeff_monomial(x))
-
             xv = -b_coeff / (2 * a_coeff)
             yv = float(f_expr.subs(x, xv))
-
-            # 숫자 포맷: 정수에 가까우면 정수로, 아니면 소수 둘째자리까지 표시
-            def fmt_num(v):
-                try:
-                    if abs(v - round(v)) < 1e-9:
-                        return str(int(round(v)))
-                except Exception:
-                    pass
-                s = f"{v:.2f}"
-                if '.' in s:
-                    s = s.rstrip('0').rstrip('.')
-                return s
-
-            # y 표시 위치를 위 또는 아래로 결정 (약간의 여백 포함)
-            y_min, y_max = ax1.get_ylim()
-            y_range = y_max - y_min if (y_max - y_min) != 0 else 1.0
-            offset = 0.06 * y_range
-
-            # 기본은 꼭짓점 위에 표시, 위로 표시하면 영역을 벗어나면 아래에 표시
-            if yv + offset <= y_max - 0.02 * y_range:
-                text_y = yv + offset
-            else:
-                text_y = yv - offset
-
-            ax1.scatter([xv], [yv], color='orange', zorder=5)
-            label = f'({fmt_num(xv)}, {fmt_num(yv)})'
-            ax1.annotate(label, xy=(xv, yv), xytext=(xv, text_y),
-                         ha='center', fontsize=10,
-                         bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.8))
+            fig.add_trace(go.Scatter(x=[xv], y=[yv], mode='markers', marker=dict(color='orange', size=10), name='꼭짓점'), row=1, col=1)
+            fig.add_annotation(x=xv, y=yv, text=f'({round(xv,3)}, {round(yv,3)})', showarrow=True, arrowhead=1, ax=0, ay=-30, row=1, col=1)
     except Exception:
-        # 표시가 실패해도 앱은 계속 동작해야 함
         pass
 
-    # 두 번째 그래프: 절댓값을 씌운 함수
-    ax2.plot(x_vals, y_transformed, 'r-', linewidth=2.5, label=f'{ylabel}')
-    ax2.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
-    ax2.axvline(x=0, color='k', linestyle='-', linewidth=0.5)
-    ax2.grid(True, alpha=0.3)
-    ax2.set_xlabel('x', fontsize=12)
-    ax2.set_ylabel(ylabel, fontsize=12)
-    ax2.set_title(f'절댓값 적용: {title_suffix}', fontsize=12, fontweight='bold')
-    ax2.set_ylim(-15, 15)
-    ax2.legend(fontsize=10)
+    # 원본 함수의 x절편 마커 (호버로 좌표 표시)
+    if roots_orig:
+        fig.add_trace(go.Scatter(x=roots_orig, y=[0]*len(roots_orig), mode='markers', marker=dict(color='red', size=8),
+                                 hovertemplate='x=%{x:.4f}<br>y=0', name='x절편'), row=1, col=1)
 
-    plt.tight_layout()
-    st.pyplot(fig)
+    # 변환 함수 그리기: left_abs 플래그가 있으면 |y| = f(x) 형태로 그립니다.
+    if left_abs:
+        # y_transformed은 f(x) 값. |y| = f(x) 이면 f(x) >= 0 인 구간에서 y = ±f(x)
+        y_vals = y_transformed
+        y_pos = np.where(np.isfinite(y_vals) & (y_vals >= 0), y_vals, np.nan)
+        y_neg = np.where(np.isfinite(y_vals) & (y_vals >= 0), -y_vals, np.nan)
+        fig.add_trace(go.Scatter(x=x_vals, y=y_pos, mode='lines', name='y = +f(x) (조건 f>=0)', line=dict(color='red')),
+                      row=1, col=2)
+        fig.add_trace(go.Scatter(x=x_vals, y=y_neg, mode='lines', name='y = -f(x) (조건 f>=0)', line=dict(color='purple', dash='dash')),
+                      row=1, col=2)
+        fig.add_trace(go.Scatter(x=[x_vals[0], x_vals[-1]], y=[0, 0], mode='lines', line=dict(color='black', width=1), showlegend=False), row=1, col=2)
+        # 변환 함수의 x절편(즉 f(x)=0) 마커
+        if roots_trans:
+            fig.add_trace(go.Scatter(x=roots_trans, y=[0]*len(roots_trans), mode='markers', marker=dict(color='green', size=8),
+                                     hovertemplate='x=%{x:.4f}<br>y=0', name='x절편(변환)'), row=1, col=2)
+    else:
+        fig.add_trace(go.Scatter(x=x_vals, y=y_transformed, mode='lines', name='변환 함수', line=dict(color='red')),
+                      row=1, col=2)
+        fig.add_trace(go.Scatter(x=[x_vals[0], x_vals[-1]], y=[0, 0], mode='lines', line=dict(color='black', width=1), showlegend=False), row=1, col=2)
+        # 변환 함수의 x절편 마커
+        if roots_trans:
+            fig.add_trace(go.Scatter(x=roots_trans, y=[0]*len(roots_trans), mode='markers', marker=dict(color='green', size=8),
+                                     hovertemplate='x=%{x:.4f}<br>y=0', name='x절편(변환)'), row=1, col=2)
 
-# 최종 수식 표시
-st.write("---")
-st.header("✨ 최종 결과")
 
-if st.session_state.abs_history:
-    col_formula1, col_formula2 = st.columns([1, 1])
-    
-    with col_formula1:
-        st.subheader("📋 적용 과정")
-        st.write(f"**Step 0 (원본):** y = {function_input}")
-        
-        for i, operation in enumerate(st.session_state.abs_history, 1):
-            if operation == '|f(x)|':
-                st.write(f"**Step {i}:** y축에 절댓값 → |y| = |f(x)|")
-            elif operation == 'f(|x|)':
-                st.write(f"**Step {i}:** x축에 절댓값 → y = f(|x|)")
-            elif operation == '|y|':
-                st.write(f"**Step {i}:** 전체 y값에 절댓값 → |y|")
-    
-    with col_formula2:
-        st.subheader("🎯 최종 함수")
+    # 축과 중앙 배치, 1:1 비율 설정
+    # 중심(x_center)은 일차함수인 경우 변환된 함수의 x절편(roots_trans)이 있으면 그 값을 사용
+    # 그렇지 않으면 0을 중심으로 사용합니다. y 중심은 0으로 고정.
+    # 그래프 범위를 고정값으로 설정합니다 (원래 고정된 양식으로 복원).
+    # 이전 동작처럼 그래프가 데이터에 따라 중심이나 확대를 자동으로 바꾸지 않도록 고정합니다.
+    x_range = [-10.0, 10.0]
+    y_range = [-10.0, 10.0]
 
-        # sympy로 최종식을 구성해서 왼쪽에 y를 둔 등식으로 보여줍니다.
-        if len(st.session_state.abs_history) > 0:
-            sym_final_display = f_expr
-            for op in st.session_state.abs_history:
-                if op == 'f(|x|)':
-                    sym_final_display = sym_final_display.subs(x, sp.Abs(x))
-                else:
-                    sym_final_display = sp.Abs(sym_final_display)
+    # 왼쪽 그래프: x/y 축 표시, 1:1 비율
+    fig.update_xaxes(title_text='x', row=1, col=1, range=x_range, zeroline=True, zerolinewidth=2, zerolinecolor='black', showgrid=True)
+    fig.update_yaxes(title_text='f(x)', row=1, col=1, range=y_range, zeroline=True, zerolinewidth=2, zerolinecolor='black', showgrid=True,
+                     scaleanchor='x', scaleratio=1)
 
-            try:
-                eq2 = sp.Eq(sp.Symbol('y'), sp.simplify(sym_final_display))
-                st.latex(sp.latex(eq2))
-            except Exception:
-                st.write(f"y = {str(sym_final_display)}")
-            st.info("위 수식은 누적 적용된 절댓값 연산의 최종 결과입니다.")
-else:
-    st.info("절댓값을 누적 적용하면 최종 함수식이 표시됩니다.")
+    # 오른쪽 그래프
+    fig.update_xaxes(title_text='x', row=1, col=2, range=x_range, zeroline=True, zerolinewidth=2, zerolinecolor='black', showgrid=True)
+    fig.update_yaxes(title_text=ylabel, row=1, col=2, range=y_range, zeroline=True, zerolinewidth=2, zerolinecolor='black', showgrid=True,
+                     scaleanchor='x', scaleratio=1)
 
-st.write("---")
+    fig.update_layout(height=600, width=1100, showlegend=True, hovermode='closest')
 
-# 함수값 비교 표
-st.header("🔍 함수값 비교")
+    # Plotly를 Streamlit에 출력
+    st.plotly_chart(fig, use_container_width=True)
 
-abs_type = st.session_state.abs_type if st.session_state.abs_history else 'original'
-test_points = np.linspace(-5, 5, 11)
-
-if abs_type == 'original':
-    data_dict = {
-        'x': [round(val, 2) for val in test_points],
-        'f(x)': [round(f(val), 2) for val in test_points]
-    }
-    st.write("**상태: 원본 함수**")
-elif abs_type == 'f(x)':
-    data_dict = {
-        'x': [round(val, 2) for val in test_points],
-        'f(x)': [round(f(val), 2) for val in test_points],
-        '|f(x)|': [round(abs(f(val)), 2) for val in test_points]
-    }
-    st.write("**마지막 적용: |f(x)| (y축에 절댓값)**")
-elif abs_type == 'x':
-    data_dict = {
-        'x': [round(val, 2) for val in test_points],
-        'f(x)': [round(f(val), 2) for val in test_points],
-        'f(|x|)': [round(f(abs(val)), 2) for val in test_points]
-    }
-    st.write("**마지막 적용: f(|x|) (x축에 절댓값)**")
-else:  # 'y'
-    data_dict = {
-        'x': [round(val, 2) for val in test_points],
-        'f(x)': [round(f(val), 2) for val in test_points],
-        '|y|': [round(abs(f(val)), 2) for val in test_points]
-    }
-    st.write("**마지막 적용: |y| (전체 y값에 절댓값)**")
-
-st.dataframe(data_dict, use_container_width=True)
+# (최종 결과 및 치역 표시 섹션이 사용자 요청에 따라 제거되었습니다.)
